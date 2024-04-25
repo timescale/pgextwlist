@@ -64,6 +64,12 @@ that performs the extension installing, and the error behavior.
 
   Filesystem path where to look for *custom scripts*.
 
+* `extwlist.extname_from_filename`
+
+  When this flag is set to true, custom_path is interpreted as the only directory
+  to look for all custom scripts; the first part of the custom script is interpreted
+  as the target extension name.
+
 ## Usage
 
 That's quite simple:
@@ -186,6 +192,19 @@ Similarly:
    - `${extwlist.custom_path}/extname/after-drop.sql`
 
 Version-specific hook files are not supported here.
+
+When `extwlist.extname_from_filename` is set, a names of the `extname`
+custom scripts shall look like this:
+
+   - `${extwlist.custom_path}/extname--before-create.sql`
+   - `${extwlist.custom_path}/extname--after-create.sql`
+
+   - `${extwlist.custom_path}/extname--before-update.sql`
+   - `${extwlist.custom_path}/extname--after-update.sql`
+
+Both simple and version-specific hooks are supported:
+
+   - `${extwlist.custom_path}/extname--before--1.0--1.1.sql`
 
 #### custom scripts templating
 
