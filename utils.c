@@ -564,7 +564,7 @@ get_current_database_owner_name()
  * Execute given script
  */
 void
-execute_custom_script(const char *filename, const char *schemaName)
+execute_custom_script(const char *filename, const char *schemaName, const char *version)
 {
 	int			save_nestlevel;
 	StringInfoData pathbuf;
@@ -682,6 +682,17 @@ execute_custom_script(const char *filename, const char *schemaName)
 									CStringGetTextDatum("@database_owner@"),
 									CStringGetTextDatum(
 										get_current_database_owner_name()));
+
+        /*
+         * substitute the target version for the occurrences of @new_version@
+         */
+        if (version != NULL && strlen(version) > 0) {
+            t_sql = DirectFunctionCall3Coll(replace_text,
+                                            C_COLLATION_OID,
+                                            t_sql,
+                                            CStringGetTextDatum("@new_version@"),
+                                            CStringGetTextDatum(version));
+        }
 
 		/* And now back to C string */
 		c_sql = text_to_cstring(DatumGetTextPP(t_sql));
