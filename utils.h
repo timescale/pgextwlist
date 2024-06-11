@@ -37,6 +37,6 @@ void fill_in_extension_properties(const char *extname,
 								  char **old_version,
 								  char **new_version);
 
-void execute_custom_script(const char *schemaName, const char *filename);
+void execute_custom_script(const char *schemaName, const char *filename, const char *version);
 
 #endif
