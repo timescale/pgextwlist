@@ -1,3 +1,10 @@
+pgextwlist (1.19-1) unstable; urgency=medium
+
+  * PG18 Support, take 2: Revert CreateQueryDesc change.
+    (Upstream 525392d57)
+
+ -- Christoph Berg <myon@debian.org>  Thu, 12 Jun 2025 14:38:58 +0200
+
 pgextwlist (1.18-1) unstable; urgency=medium
 
   * Support PostgreSQL 18.

@@ -459,9 +459,6 @@ execute_sql_string(const char *sql, const char *filename)
 				QueryDesc  *qdesc;
 
 				qdesc = CreateQueryDesc((PlannedStmt *) stmt,
-#if PG_MAJOR_VERSION >= 1800
-										NULL,
-#endif
 										sql,
 										GetActiveSnapshot(), NULL,
 										dest, NULL,
