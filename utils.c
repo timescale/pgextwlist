@@ -491,7 +491,7 @@ execute_sql_string(const char *sql, const char *filename)
 
 				ExecutorStart(qdesc, 0);
 				ExecutorRun(qdesc, ForwardScanDirection, 0
-#if PG_MAJOR_VERSION >= 1000
+#if PG_MAJOR_VERSION >= 1000 && PG_MAJOR_VERSION < 1800
 					, true
 #endif
 				);
