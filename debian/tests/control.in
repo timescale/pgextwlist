@@ -1,6 +1,8 @@
 Depends:
+ postgresql-common-dev,
  postgresql-contrib-PGVERSION,
- make,
  @,
-Tests: installcheck
-Restrictions: allow-stderr
+Tests:
+ installcheck,
+Restrictions:
+ allow-stderr,
