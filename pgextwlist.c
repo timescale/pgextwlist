@@ -28,6 +28,7 @@
 #include "catalog/namespace.h"
 #include "commands/comment.h"
 #include "commands/dbcommands.h"
+#include "commands/extension.h"
 #include "commands/seclabel.h"
 #include "commands/user.h"
 #if PG_MAJOR_VERSION >= 1000
@@ -309,15 +310,26 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 		case T_CreateExtensionStmt:
 		{
 			CreateExtensionStmt *stmt = (CreateExtensionStmt *)parsetree;
+            bool extension_exists = false;
 			name = stmt->extname;
 			fill_in_extension_properties(name, stmt->options,
 										 &schema, &old_version, &new_version);
 
 			if (extension_is_whitelisted(name))
 			{
+                if (stmt->if_not_exists && get_extension_oid(stmt->extname, true) != InvalidOid)
+                {
+                    ereport(NOTICE,
+                            (errcode(ERRCODE_DUPLICATE_OBJECT),
+                                    errmsg("extension \"%s\" already exists, skipping custom scripts",
+                                           stmt->extname)));
+                    extension_exists = true;
+                }
+
+
 				call_ProcessUtility(PROCESS_UTILITY_ARGS,
 									name, schema,
-									old_version, new_version, "create");
+									old_version, new_version, !extension_exists ? "create": "");
 				return;
 			}
 			break;
