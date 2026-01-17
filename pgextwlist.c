@@ -237,7 +237,7 @@ call_extension_scripts(const char *extname,
 
 		if (access(specific_custom_script, F_OK) == 0)
 		{
-			execute_custom_script(specific_custom_script, schema);
+            execute_custom_script(specific_custom_script, schema, version);
 			return; /* skip generic script */
 		}
 	}
@@ -248,7 +248,7 @@ call_extension_scripts(const char *extname,
 	elog(DEBUG1, "Considering custom script \"%s\"", generic_custom_script);
 
 	if (access(generic_custom_script, F_OK) == 0)
-		execute_custom_script(generic_custom_script, schema);
+        execute_custom_script(generic_custom_script, schema, version);
 }
 
 static bool
