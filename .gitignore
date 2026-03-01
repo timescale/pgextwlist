@@ -1,4 +1,8 @@
 *.o
-pgextwlist.so
 .deps
 .vagrant
+pgextwlist.so
+regression.diffs
+regression.out
+results
+tmp_check

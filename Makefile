@@ -5,6 +5,7 @@ MODULE_big = pgextwlist
 OBJS       = utils.o pgextwlist.o
 DOCS       = README.md
 REGRESS    = setup pgextwlist errors crossuser hooks
+REGRESS_OPTS += --temp-instance=./tmp_check --temp-config=test.conf
 RPM_MINOR_VERSION_SUFFIX ?=
 
 PG_CONFIG = pg_config
