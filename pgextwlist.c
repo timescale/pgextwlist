@@ -21,6 +21,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_database.h"
@@ -51,6 +52,12 @@
 #endif
 #if PG_MAJOR_VERSION >= 1000
 #include "utils/varlena.h"
+#endif
+#if PG_MAJOR_VERSION >= 1200
+#include "access/table.h"
+#else
+#define table_open(r, l) heap_open(r, l)
+#define table_close(r, l) heap_close(r, l)
 #endif
 
 /*
@@ -251,6 +258,50 @@ call_extension_scripts(const char *extname,
 		execute_custom_script(generic_custom_script, schema);
 }
 
+/*
+ * We do not allow extensions to be created or updated if there are temporary
+ * objects in the session, because those objects could shadow objects accessed
+ * by the extension's script, leading to security vulnerabilities for extensions
+ * that do not schema-qualify their objects or lock down their search_path.
+ */
+static void
+pg_temp_is_empty(const char *name)
+{
+	Oid			temp_namespace;
+	Relation	rel;
+	ScanKeyData key[1];
+	SysScanDesc scan;
+
+	temp_namespace = LookupExplicitNamespace("pg_temp", true);
+	if (!OidIsValid(temp_namespace))
+		return;
+
+	rel = table_open(RelationRelationId, AccessShareLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_class_relnamespace,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(temp_namespace));
+
+	scan = systable_beginscan(rel, InvalidOid, false,
+							  NULL, 1, key);
+
+	if (HeapTupleIsValid(systable_getnext(scan)))
+		ereport(ERROR, (errcode(ERRCODE_OPERATOR_INTERVENTION),
+			errmsg("extension \"%s\" cannot be installed with temporary objects in the session", name),
+			errhint("Start a new session and execute CREATE EXTENSION as the first command. "
+				"Make sure to pass the \"-X\" flag to psql.")));
+
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+}
+
+static void
+check_environment(const char *name)
+{
+	pg_temp_is_empty(name);
+}
+
 static bool
 extension_is_whitelisted(const char *name)
 {
@@ -315,6 +366,7 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 
 			if (extension_is_whitelisted(name))
 			{
+        check_environment(name);
 				call_ProcessUtility(PROCESS_UTILITY_ARGS,
 									name, schema,
 									old_version, new_version, "create");
