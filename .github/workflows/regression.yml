@@ -37,3 +37,8 @@ jobs:
           chown -R postgres:postgres .
           sudo -u postgres make installcheck
 
+      - name: Show diff
+        if: failure()
+        run: |
+          cat regression.diffs
+
