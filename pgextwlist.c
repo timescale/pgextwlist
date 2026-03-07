@@ -17,16 +17,20 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/htup_details.h"
 #include "access/xact.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_namespace.h"
+#include "commands/extension.h"
 #include "commands/comment.h"
 #include "commands/dbcommands.h"
 #include "commands/seclabel.h"
@@ -45,6 +49,7 @@
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "utils/catcache.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
 #if PG_MAJOR_VERSION < 1200
@@ -296,10 +301,138 @@ pg_temp_is_empty(const char *name)
 	table_close(rel, AccessShareLock);
 }
 
+/*
+ * Check that the extension's target schema does not contain relations whose
+ * names match relations in pg_catalog.
+ */
 static void
-check_environment(const char *name)
+no_relation_shadows(const char *name, const char *schema, Oid ext_namespace)
 {
+	Relation	rel;
+	ScanKeyData key[1];
+	SysScanDesc scan;
+	HeapTuple	tuple;
+
+	rel = table_open(RelationRelationId, AccessShareLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_class_relnamespace,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(ext_namespace));
+
+	scan = systable_beginscan(rel, InvalidOid, false,
+							  NULL, 1, key);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
+		const char *relname = NameStr(classForm->relname);
+		Oid			catalog_oid;
+
+		catalog_oid = get_relname_relid(relname, PG_CATALOG_NAMESPACE);
+		if (!OidIsValid(catalog_oid))
+			continue;
+
+		systable_endscan(scan);
+		table_close(rel, AccessShareLock);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_OPERATOR_INTERVENTION),
+				 errmsg("extension \"%s\" cannot be installed because "
+						"\"%s\".\"%s\" shadows a pg_catalog object",
+						name, schema, relname),
+				 errhint("Drop the shadowing object and try again.")));
+	}
+
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+}
+
+/*
+ * Check that the extension's target schema does not contain functions whose
+ * names match functions in pg_catalog.
+ */
+static void
+no_function_shadows(const char *name, const char *schema, Oid ext_namespace)
+{
+	Relation	rel;
+	ScanKeyData key[1];
+	SysScanDesc scan;
+	HeapTuple	tuple;
+
+	rel = table_open(ProcedureRelationId, AccessShareLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_proc_pronamespace,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(ext_namespace));
+
+	scan = systable_beginscan(rel, InvalidOid, false,
+							  NULL, 1, key);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Form_pg_proc procForm = (Form_pg_proc) GETSTRUCT(tuple);
+		const char *proname = NameStr(procForm->proname);
+#if PG_MAJOR_VERSION >= 1200
+		Oid			funcOid = procForm->oid;
+#else
+		Oid			funcOid = HeapTupleGetOid(tuple);
+#endif
+		CatCList   *catlist;
+		int			i;
+
+		/* Functions owned by an extension are legitimate, skip them */
+		if (OidIsValid(getExtensionOfObject(ProcedureRelationId, funcOid)))
+			continue;
+
+		catlist = SearchSysCacheList1(PROCNAMEARGSNSP,
+									  CStringGetDatum(proname));
+
+		for (i = 0; i < catlist->n_members; i++)
+		{
+			HeapTuple	htup = &catlist->members[i]->tuple;
+			Form_pg_proc catalogForm = (Form_pg_proc) GETSTRUCT(htup);
+
+			if (catalogForm->pronamespace != PG_CATALOG_NAMESPACE)
+				continue;
+
+			ReleaseSysCacheList(catlist);
+			systable_endscan(scan);
+			table_close(rel, AccessShareLock);
+
+			ereport(ERROR,
+					(errcode(ERRCODE_OPERATOR_INTERVENTION),
+					 errmsg("extension \"%s\" cannot be installed because "
+							"\"%s\".\"%s\"() shadows a pg_catalog function",
+							name, schema, proname),
+					 errhint("Drop the shadowing function and try again.")));
+		}
+
+		ReleaseSysCacheList(catlist);
+	}
+
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+}
+
+static void
+check_environment(const char *name, const char *schema)
+{
+	Oid			ext_namespace;
+
 	pg_temp_is_empty(name);
+
+	ext_namespace = LookupExplicitNamespace(schema, true);
+	if (!OidIsValid(ext_namespace))
+		return;
+
+	/* If the extension targets pg_catalog itself, no shadowing is possible */
+	if (ext_namespace == PG_CATALOG_NAMESPACE)
+		return;
+
+	no_relation_shadows(name, schema, ext_namespace);
+	no_function_shadows(name, schema, ext_namespace);
 }
 
 static bool
@@ -366,7 +499,7 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 
 			if (extension_is_whitelisted(name))
 			{
-        check_environment(name);
+        check_environment(name, schema);
 				call_ProcessUtility(PROCESS_UTILITY_ARGS,
 									name, schema,
 									old_version, new_version, "create");
