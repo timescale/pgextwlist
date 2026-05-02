@@ -34,6 +34,7 @@ jobs:
       - name: Test on PostgreSQL ${{ matrix.pg }}
         run: |
           sudo make install
+          sudo make install-tsdb-stub
           chown -R postgres:postgres .
           sudo -u postgres make installcheck
 

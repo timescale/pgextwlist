@@ -351,9 +351,21 @@ no_relation_shadows(const char *name, const char *schema, Oid ext_namespace)
 /*
  * Check that the extension's target schema does not contain functions whose
  * names match functions in pg_catalog.
+ *
+ * If variadic_catalog_only is true, the check only fires when the shadowed
+ * pg_catalog function is itself variadic — regardless of whether the
+ * shadowing user function is variadic. Variadic catalog shadows are the
+ * easiest class to exploit, so blocking them at runtime is the highest-
+ * value protection: it shields users still on older timescaledb versions
+ * (whose own code may not yet defend against this) from exploitation
+ * attempts. Non-variadic shadows are also potentially exploitable but
+ * are caught by timescaledb's own CI on current versions, so we accept
+ * that residual risk in exchange for permitting legitimate shadowing
+ * (e.g. installing aggregate functions for additional data types).
  */
 static void
-no_function_shadows(const char *name, const char *schema, Oid ext_namespace)
+no_function_shadows(const char *name, const char *schema, Oid ext_namespace,
+					bool variadic_catalog_only)
 {
 	Relation	rel;
 	ScanKeyData key[1];
@@ -397,6 +409,10 @@ no_function_shadows(const char *name, const char *schema, Oid ext_namespace)
 			if (catalogForm->pronamespace != PG_CATALOG_NAMESPACE)
 				continue;
 
+			if (variadic_catalog_only &&
+				!OidIsValid(catalogForm->provariadic))
+				continue;
+
 			ReleaseSysCacheList(catlist);
 			systable_endscan(scan);
 			table_close(rel, AccessShareLock);
@@ -432,7 +448,19 @@ check_environment(const char *name, const char *schema)
 		return;
 
 	no_relation_shadows(name, schema, ext_namespace);
-	no_function_shadows(name, schema, ext_namespace);
+
+	/*
+	 * For timescaledb, only block shadows of variadic pg_catalog
+	 * functions. Variadic shadows are the easiest to exploit, and
+	 * blocking them here protects users on older timescaledb versions
+	 * whose own code may not yet defend against this. Non-variadic
+	 * shadows are also potentially exploitable but are caught by
+	 * timescaledb's own CI on current versions, which makes the residual
+	 * risk acceptable in exchange for permitting legitimate shadowing
+	 * (e.g. aggregate functions on additional data types).
+	 */
+	no_function_shadows(name, schema, ext_namespace,
+						strcmp(name, "timescaledb") == 0);
 }
 
 static bool

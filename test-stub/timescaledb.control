@@ -1,0 +1,7 @@
+# pgextwlist regression stub — NOT the real TimescaleDB.
+# Installed by the Makefile's install-tsdb-stub target so the
+# variadic_shadow regression test can exercise the timescaledb-only
+# code path in pgextwlist.c without depending on a real install.
+default_version = '0.0.0'
+comment = 'pgextwlist test stub'
+relocatable = true

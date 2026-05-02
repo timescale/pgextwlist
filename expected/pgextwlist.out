@@ -1,8 +1,8 @@
 SET ROLE mere_mortal;
 SHOW extwlist.extensions;
-                  extwlist.extensions                   
---------------------------------------------------------
- citext,earthdistance,pg_trgm,pg_stat_statements,refint
+                        extwlist.extensions                         
+--------------------------------------------------------------------
+ citext,earthdistance,pg_trgm,pg_stat_statements,refint,timescaledb
 (1 row)
 
 SELECT extname FROM pg_extension ORDER BY 1;

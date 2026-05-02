@@ -1,0 +1,56 @@
+
+SET ROLE admin;
+
+CREATE SCHEMA variadic_custom;
+
+-- Use VERSION '0.0.0' throughout -- that's the pgextwlist test stub.
+-- Avoids loading the real TimescaleDB .so (and its preload check) when
+-- a real install happens to be present on the host sharedir.
+
+-- baseline: stub installs cleanly when nothing shadows pg_catalog
+CREATE EXTENSION timescaledb VERSION '0.0.0';
+DROP EXTENSION timescaledb;
+
+-- Shadowing a NON-variadic pg_catalog function (e.g. upper(text)) is
+-- ALLOWED for timescaledb.
+CREATE FUNCTION public.upper(int) RETURNS int
+    LANGUAGE sql AS $$ SELECT $1 $$;
+CREATE EXTENSION timescaledb VERSION '0.0.0';
+DROP EXTENSION timescaledb;
+DROP FUNCTION public.upper(int);
+
+-- Shadowing a VARIADIC pg_catalog function (format) with a NON-variadic
+-- user function is BLOCKED for timescaledb.
+CREATE FUNCTION public.format(text, text, text) RETURNS text
+    LANGUAGE sql AS $$ SELECT $1 $$;
+CREATE EXTENSION timescaledb VERSION '0.0.0';
+-- installation in a different schema should still succeed
+CREATE EXTENSION timescaledb VERSION '0.0.0' SCHEMA variadic_custom;
+DROP EXTENSION timescaledb;
+DROP FUNCTION public.format(text, text, text);
+
+-- Shadowing a VARIADIC pg_catalog function with a VARIADIC user function
+-- is BLOCKED for timescaledb.
+CREATE FUNCTION public.format(VARIADIC text[]) RETURNS text
+    LANGUAGE sql AS $$ SELECT $1[1] $$;
+CREATE EXTENSION timescaledb VERSION '0.0.0';
+DROP FUNCTION public.format(VARIADIC text[]);
+
+-- with shadow removed, install succeeds again in public
+CREATE EXTENSION timescaledb VERSION '0.0.0';
+DROP EXTENSION timescaledb;
+
+-- sanity: a non-timescaledb extension still trips on a non-variadic shadow
+-- of a non-variadic catalog function (full check applies, not just variadic)
+CREATE FUNCTION public.upper(int) RETURNS int
+    LANGUAGE sql AS $$ SELECT $1 $$;
+CREATE EXTENSION citext;
+DROP FUNCTION public.upper(int);
+
+-- and on a variadic shadow of a variadic catalog function
+CREATE FUNCTION public.format(VARIADIC text[]) RETURNS text
+    LANGUAGE sql AS $$ SELECT $1[1] $$;
+CREATE EXTENSION citext;
+DROP FUNCTION public.format(VARIADIC text[]);
+
+DROP SCHEMA variadic_custom;
