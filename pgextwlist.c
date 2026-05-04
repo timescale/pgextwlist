@@ -265,9 +265,13 @@ call_extension_scripts(const char *extname,
 
 /*
  * We do not allow extensions to be created or updated if there are temporary
- * objects in the session, because those objects could shadow objects accessed
- * by the extension's script, leading to security vulnerabilities for extensions
- * that do not schema-qualify their objects or lock down their search_path.
+ * objects in the session. PostgreSQL locks down search_path to a safe value
+ * during CREATE/ALTER EXTENSION, so pg_temp objects cannot normally be
+ * resolved from an extension script. However, an extension that explicitly
+ * resets search_path to an unsafe value re-exposes itself to shadowing by
+ * temporary objects, which can lead to privilege escalation. Refuse to
+ * proceed when pg_temp is non-empty so such extensions cannot be exploited
+ * this way.
  */
 static void
 pg_temp_is_empty(const char *name)
