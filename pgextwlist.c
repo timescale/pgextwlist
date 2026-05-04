@@ -29,6 +29,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_extension.h"
 #include "catalog/pg_namespace.h"
 #include "commands/extension.h"
 #include "commands/comment.h"
@@ -552,6 +553,43 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 
 			if (extension_is_whitelisted(name))
 			{
+				/*
+				 * ALTER EXTENSION ... UPDATE runs the upgrade scripts and the
+				 * "before" custom script as bootstrap superuser, so apply the
+				 * same shadow/pg_temp checks as CREATE. The schema must come
+				 * from the catalog: ALTER carries no SCHEMA clause, so the
+				 * value filled in above does not reflect the installed
+				 * namespace whose objects the upgrade scripts will resolve.
+				 */
+#if PG_MAJOR_VERSION >= 1600
+				schema = get_namespace_name(
+					get_extension_schema(get_extension_oid(name, false)));
+#else
+				{
+					Relation	extRel;
+					ScanKeyData key[1];
+					SysScanDesc extScan;
+					HeapTuple	extTup;
+
+					extRel = table_open(ExtensionRelationId, AccessShareLock);
+					ScanKeyInit(&key[0],
+								Anum_pg_extension_extname,
+								BTEqualStrategyNumber, F_NAMEEQ,
+								CStringGetDatum(name));
+					extScan = systable_beginscan(extRel, ExtensionNameIndexId,
+												 true, NULL, 1, key);
+					extTup = systable_getnext(extScan);
+					if (!HeapTupleIsValid(extTup))
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_OBJECT),
+								 errmsg("extension \"%s\" does not exist", name)));
+					schema = get_namespace_name(
+						((Form_pg_extension) GETSTRUCT(extTup))->extnamespace);
+					systable_endscan(extScan);
+					table_close(extRel, AccessShareLock);
+				}
+#endif
+				check_environment(name, schema);
 				call_ProcessUtility(PROCESS_UTILITY_ARGS,
 									name, schema,
 									old_version, new_version, "update");

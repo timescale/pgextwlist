@@ -4,7 +4,7 @@ long_ver = $(shell (git describe --tags --long '--match=v*' 2>/dev/null || echo 
 MODULE_big = pgextwlist
 OBJS       = utils.o pgextwlist.o
 DOCS       = README.md
-REGRESS    = setup pgextwlist errors crossuser hooks pg_temp catalog_shadow variadic_shadow
+REGRESS    = setup pgextwlist errors crossuser hooks pg_temp catalog_shadow variadic_shadow alter_update_shadow
 REGRESS_OPTS += --temp-instance=./tmp_check --temp-config=test.conf
 RPM_MINOR_VERSION_SUFFIX ?=
 
@@ -33,6 +33,8 @@ install-tsdb-stub:
 	  $(INSTALL_DATA) test-stub/timescaledb.control $(EXT_DIR)/; \
 	fi
 	$(INSTALL_DATA) test-stub/timescaledb--0.0.0.sql $(EXT_DIR)/
+	$(INSTALL_DATA) test-stub/timescaledb--0.0.1.sql $(EXT_DIR)/
+	$(INSTALL_DATA) test-stub/timescaledb--0.0.0--0.0.1.sql $(EXT_DIR)/
 
 uninstall-tsdb-stub:
 	@if [ -e "$(EXT_DIR)/timescaledb.control" ] && \
@@ -40,6 +42,8 @@ uninstall-tsdb-stub:
 	  rm -f $(EXT_DIR)/timescaledb.control; \
 	fi
 	rm -f $(EXT_DIR)/timescaledb--0.0.0.sql
+	rm -f $(EXT_DIR)/timescaledb--0.0.1.sql
+	rm -f $(EXT_DIR)/timescaledb--0.0.0--0.0.1.sql
 
 DEBUILD_ROOT = /tmp/pgextwlist
 

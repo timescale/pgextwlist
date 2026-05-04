@@ -1,0 +1,36 @@
+SET ROLE admin;
+CREATE SCHEMA alter_update_custom;
+-- ALTER EXTENSION ... UPDATE elevates to bootstrap superuser to run
+-- upgrade scripts and the "before" custom script. The same shadow and
+-- pg_temp checks that gate CREATE must apply here, otherwise a user
+-- could install the extension cleanly and then poison the environment
+-- before triggering an UPDATE.
+-- baseline: install at 0.0.0 in a clean schema, then update to 0.0.1.
+CREATE EXTENSION timescaledb VERSION '0.0.0' SCHEMA alter_update_custom;
+ALTER EXTENSION timescaledb UPDATE TO '0.0.1';
+DROP EXTENSION timescaledb;
+-- pg_temp shadowing must block ALTER EXTENSION UPDATE.
+CREATE EXTENSION timescaledb VERSION '0.0.0' SCHEMA alter_update_custom;
+CREATE TEMP TABLE pg_proc AS SELECT * FROM pg_catalog.pg_proc;
+ALTER EXTENSION timescaledb UPDATE TO '0.0.1';
+ERROR:  extension "timescaledb" cannot be installed with temporary objects in the session
+HINT:  Start a new session and execute CREATE EXTENSION as the first command. Make sure to pass the "-X" flag to psql.
+DROP TABLE pg_temp.pg_proc;
+-- variadic pg_catalog shadow in the extension's installed schema must
+-- block ALTER EXTENSION UPDATE for timescaledb.
+CREATE FUNCTION alter_update_custom.format(VARIADIC text[]) RETURNS text
+    LANGUAGE sql AS $$ SELECT $1[1] $$;
+ALTER EXTENSION timescaledb UPDATE TO '0.0.1';
+ERROR:  extension "timescaledb" cannot be installed because "alter_update_custom"."format"() shadows a pg_catalog function
+HINT:  Drop the shadowing function and try again.
+DROP FUNCTION alter_update_custom.format(VARIADIC text[]);
+-- pg_catalog relation shadow in the installed schema must also block.
+CREATE TABLE alter_update_custom.pg_class (a int);
+ALTER EXTENSION timescaledb UPDATE TO '0.0.1';
+ERROR:  extension "timescaledb" cannot be installed because "alter_update_custom"."pg_class" shadows a pg_catalog object
+HINT:  Drop the shadowing object and try again.
+DROP TABLE alter_update_custom.pg_class;
+-- with the environment cleaned up, the update succeeds.
+ALTER EXTENSION timescaledb UPDATE TO '0.0.1';
+DROP EXTENSION timescaledb;
+DROP SCHEMA alter_update_custom;
