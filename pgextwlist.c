@@ -532,7 +532,7 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 
 			if (extension_is_whitelisted(name))
 			{
-        check_environment(name, schema);
+				check_environment(name, schema);
 				call_ProcessUtility(PROCESS_UTILITY_ARGS,
 									name, schema,
 									old_version, new_version, "create");
