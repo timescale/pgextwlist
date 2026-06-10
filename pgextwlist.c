@@ -307,6 +307,49 @@ pg_temp_is_empty(const char *name)
 }
 
 /*
+ * When the extension's control file pins its schema ("schema = ..."), the
+ * schema is dedicated to the extension and the legitimate install flow is
+ * that CREATE EXTENSION creates it -- which here happens as the bootstrap
+ * superuser, yielding a superuser-owned schema with no grants.
+ *
+ * A pre-existing schema owned by a non-superuser is a security risk because
+ * the extension scripts run as superuser and can resolve objects from that
+ * schema. To prevent this we require the pinned schema to be either absent
+ * or superuser-owned.
+ */
+static void
+pinned_schema_is_superuser_owned(const char *name, const char *schema,
+								 Oid ext_namespace)
+{
+	char	   *control_schema;
+	HeapTuple	tup;
+	Oid			owner;
+
+	control_schema = get_extension_control_schema(name);
+
+	/*
+	 * A target schema different from the pinned one is rejected by core, no
+	 * need to check anything here.
+	 */
+	if (control_schema == NULL || strcmp(control_schema, schema) != 0)
+		return;
+
+	tup = SearchSysCache1(NAMESPACEOID, ObjectIdGetDatum(ext_namespace));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for namespace %u", ext_namespace);
+	owner = ((Form_pg_namespace) GETSTRUCT(tup))->nspowner;
+	ReleaseSysCache(tup);
+
+	if (!superuser_arg(owner))
+		ereport(ERROR,
+				(errcode(ERRCODE_OPERATOR_INTERVENTION),
+				 errmsg("extension \"%s\" cannot be installed into schema \"%s\" "
+						"because the schema is not owned by a superuser",
+						name, schema),
+				 errhint("Drop the schema so it can be created during installation.")));
+}
+
+/*
  * Check that the extension's target schema does not contain relations whose
  * names match relations in pg_catalog.
  */
@@ -444,13 +487,15 @@ check_environment(const char *name, const char *schema)
 
 	pg_temp_is_empty(name);
 
-	ext_namespace = LookupExplicitNamespace(schema, true);
+	ext_namespace = get_namespace_oid(schema, true);
 	if (!OidIsValid(ext_namespace))
 		return;
 
 	/* If the extension targets pg_catalog itself, no shadowing is possible */
 	if (ext_namespace == PG_CATALOG_NAMESPACE)
 		return;
+
+	pinned_schema_is_superuser_owned(name, schema, ext_namespace);
 
 	no_relation_shadows(name, schema, ext_namespace);
 

@@ -4,7 +4,7 @@ long_ver = $(shell (git describe --tags --long '--match=v*' 2>/dev/null || echo 
 MODULE_big = pgextwlist
 OBJS       = utils.o pgextwlist.o
 DOCS       = README.md
-REGRESS    = setup pgextwlist errors crossuser hooks pg_temp catalog_shadow variadic_shadow alter_update_shadow
+REGRESS    = setup pgextwlist errors crossuser hooks pg_temp catalog_shadow variadic_shadow alter_update_shadow pinned_schema
 REGRESS_OPTS += --temp-instance=./tmp_check --temp-config=test.conf
 RPM_MINOR_VERSION_SUFFIX ?=
 
@@ -22,6 +22,9 @@ include $(PGXS)
 # add our --0.0.0.sql alongside its many version files. The regression
 # test uses CREATE EXTENSION timescaledb VERSION '0.0.0' so the real
 # .so is never loaded and the preload check is skipped.
+#
+# The same target also installs the "pinned_stub" extension, whose control
+# file pins its schema, used by the pinned_schema regression test.
 EXT_DIR := $(shell $(PG_CONFIG) --sharedir)/extension
 
 .PHONY: install-tsdb-stub uninstall-tsdb-stub
@@ -35,6 +38,7 @@ install-tsdb-stub:
 	$(INSTALL_DATA) test-stub/timescaledb--0.0.0.sql $(EXT_DIR)/
 	$(INSTALL_DATA) test-stub/timescaledb--0.0.1.sql $(EXT_DIR)/
 	$(INSTALL_DATA) test-stub/timescaledb--0.0.0--0.0.1.sql $(EXT_DIR)/
+	$(INSTALL_DATA) test-stub/pinned_stub.control test-stub/pinned_stub--*.sql $(EXT_DIR)/
 
 uninstall-tsdb-stub:
 	@if [ -e "$(EXT_DIR)/timescaledb.control" ] && \
@@ -44,6 +48,7 @@ uninstall-tsdb-stub:
 	rm -f $(EXT_DIR)/timescaledb--0.0.0.sql
 	rm -f $(EXT_DIR)/timescaledb--0.0.1.sql
 	rm -f $(EXT_DIR)/timescaledb--0.0.0--0.0.1.sql
+	rm -f $(EXT_DIR)/pinned_stub.control $(EXT_DIR)/pinned_stub--*.sql
 
 DEBUILD_ROOT = /tmp/pgextwlist
 
