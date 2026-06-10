@@ -1,0 +1,8 @@
+# pgextwlist regression stub — NOT a real extension.
+# Installed by the Makefile's install-tsdb-stub target so the
+# pinned_schema regression test can exercise the control-file-pinned
+# schema ownership check in pgextwlist.c.
+default_version = '0.0.0'
+comment = 'pgextwlist test stub'
+relocatable = false
+schema = 'pinned_stub'

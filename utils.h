@@ -31,6 +31,8 @@ char *get_generic_custom_script_filename(const char *name,
 
 char *get_extension_current_version(const char *extname);
 
+char *get_extension_control_schema(const char *extname);
+
 void fill_in_extension_properties(const char *extname,
 								  List *options,
 								  char **schema,

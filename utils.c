@@ -126,6 +126,21 @@ parse_default_version_in_control_file(const char *extname,
 }
 
 /*
+ * Return the schema pinned by the extension's control file ("schema = ..."),
+ * or NULL when the control file does not specify one.
+ */
+char *
+get_extension_control_schema(const char *extname)
+{
+	char	   *version = NULL;
+	char	   *schema = NULL;
+
+	parse_default_version_in_control_file(extname, &version, &schema);
+
+	return schema;
+}
+
+/*
  * We lookup scripts at the following places and run them when they exist:
  *
  *  ${extwlist_custom_path}/${extname}/${when}--${version}.sql (upgrade)
