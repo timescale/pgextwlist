@@ -1,0 +1,26 @@
+SET ROLE admin;
+CREATE SCHEMA ine;
+CREATE EXTENSION citext SCHEMA ine;
+-- a catalog shadow in the extension schema would normally block CREATE
+CREATE TABLE ine.pg_type(id int);
+-- IF NOT EXISTS on an installed extension is a no-op, so it is not blocked
+CREATE EXTENSION IF NOT EXISTS citext;
+NOTICE:  extension "citext" already exists, skipping
+CREATE EXTENSION IF NOT EXISTS citext SCHEMA ine;
+NOTICE:  extension "citext" already exists, skipping
+CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
+NOTICE:  extension "citext" already exists, skipping
+-- without IF NOT EXISTS the shadow check still applies
+CREATE EXTENSION citext SCHEMA ine;
+ERROR:  extension "citext" cannot be installed because "ine"."pg_type" shadows a pg_catalog object
+HINT:  Drop the shadowing object and try again.
+-- IF NOT EXISTS on an extension that is not installed is still checked
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA ine;
+ERROR:  extension "pg_trgm" cannot be installed because "ine"."pg_type" shadows a pg_catalog object
+HINT:  Drop the shadowing object and try again.
+DROP TABLE ine.pg_type;
+-- and succeeds once the shadow is gone
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA ine;
+DROP EXTENSION pg_trgm;
+DROP EXTENSION citext;
+DROP SCHEMA ine;

@@ -4,7 +4,7 @@ long_ver = $(shell (git describe --tags --long '--match=v*' 2>/dev/null || echo 
 MODULE_big = pgextwlist
 OBJS       = utils.o pgextwlist.o
 DOCS       = README.md
-REGRESS    = setup pgextwlist errors crossuser hooks pg_temp catalog_shadow variadic_shadow alter_update_shadow pinned_schema
+REGRESS    = setup pgextwlist errors crossuser hooks pg_temp catalog_shadow variadic_shadow alter_update_shadow pinned_schema create_if_not_exists
 REGRESS_OPTS += --temp-instance=./tmp_check --temp-config=test.conf
 RPM_MINOR_VERSION_SUFFIX ?=
 
