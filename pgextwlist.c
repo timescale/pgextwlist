@@ -572,6 +572,18 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 		{
 			CreateExtensionStmt *stmt = (CreateExtensionStmt *)parsetree;
 			name = stmt->extname;
+
+			/*
+			 * CREATE EXTENSION IF NOT EXISTS on an already installed
+			 * extension is a no-op that only emits a notice, so there is
+			 * nothing to escalate privileges for. Hand it over to the
+			 * regular processing instead of running the environment checks
+			 * and the custom scripts for an installation that won't happen.
+			 */
+			if (stmt->if_not_exists &&
+				OidIsValid(get_extension_oid(name, true)))
+				break;
+
 			fill_in_extension_properties(name, stmt->options,
 										 &schema, &old_version, &new_version);
 
