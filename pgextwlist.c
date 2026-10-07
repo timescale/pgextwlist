@@ -1,4 +1,5 @@
-/* PostgreSQL Extension WhiteList -- Dimitri Fontaine
+/*
+ * PostgreSQL Extension WhiteList -- Dimitri Fontaine
  *
  * Author: Dimitri Fontaine <dimitri@2ndQuadrant.fr>
  * Licence: PostgreSQL
@@ -9,7 +10,9 @@
  */
 
 #include <stdio.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 #include "postgres.h"
 
 #include "pgextwlist.h"
@@ -36,11 +39,7 @@
 #include "commands/dbcommands.h"
 #include "commands/seclabel.h"
 #include "commands/user.h"
-#if PG_MAJOR_VERSION >= 1000
 #include "common/md5.h"
-#else
-#include "libpq/md5.h"
-#endif
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
@@ -56,9 +55,7 @@
 #if PG_MAJOR_VERSION < 1200
 #include "utils/tqual.h"
 #endif
-#if PG_MAJOR_VERSION >= 1000
 #include "utils/varlena.h"
-#endif
 #if PG_MAJOR_VERSION >= 1200
 #include "access/table.h"
 #else
@@ -74,33 +71,17 @@
  */
 PG_MODULE_MAGIC;
 
-char *extwlist_extensions = NULL;
-char *extwlist_custom_path = NULL;
-bool extwlist_extname_from_filename = false;
+char	   *extwlist_extensions = NULL;
+char	   *extwlist_custom_path = NULL;
+bool		extwlist_restrict_to_database_owner = false;
+bool		extwlist_extname_from_filename = false;
 
 static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 
 void		_PG_init(void);
 void		_PG_fini(void);
 
-#if PG_MAJOR_VERSION < 903
-#define PROCESS_UTILITY_PROTO_ARGS Node *parsetree, const char *queryString,  \
-									ParamListInfo params, bool isTopLevel,    \
-									DestReceiver *dest, char *completionTag
-
-#define PROCESS_UTILITY_ARGS parsetree, queryString, params, \
-                              isTopLevel, dest, completionTag
-#elif PG_MAJOR_VERSION < 1000
-#define PROCESS_UTILITY_PROTO_ARGS Node *parsetree,                    \
-										const char *queryString,       \
-										ProcessUtilityContext context, \
-										ParamListInfo params,          \
-										DestReceiver *dest,            \
-										char *completionTag
-
-#define PROCESS_UTILITY_ARGS parsetree, queryString, context, \
-                              params, dest, completionTag
-#elif PG_MAJOR_VERSION < 1300
+#if PG_MAJOR_VERSION < 1300
 #define PROCESS_UTILITY_PROTO_ARGS PlannedStmt *pstmt,                    \
 										const char *queryString,       \
 										ProcessUtilityContext context, \
@@ -132,7 +113,7 @@ void		_PG_fini(void);
 										QueryCompletion *qc
 #define PROCESS_UTILITY_ARGS pstmt, queryString, readOnlyTree, context, \
                               params, queryEnv, dest, qc
-#endif	/* PG_MAJOR_VERSION */
+#endif							/* PG_MAJOR_VERSION */
 
 #define EREPORT_EXTENSION_IS_NOT_WHITELISTED(op)						\
         ereport(ERROR,                                                  \
@@ -154,6 +135,48 @@ static void call_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS,
 								const char *new_version,
 								const char *action);
 static void call_RawProcessUtility(PROCESS_UTILITY_PROTO_ARGS);
+
+/*
+ * Check that the configured extwlist.custom_path exists, is a directory,
+ * and is reachable. Empty/NULL disables the feature (no validation).
+ *
+ * Failing here is intentional: a misconfigured custom_path would silently
+ * bypass intended extension hooks, which defeats the security purpose of
+ * the whitelist. Better to refuse the configuration outright.
+ */
+static void
+check_extwlist_custom_path_impl(const char *newval)
+{
+	struct stat st;
+
+	if (newval == NULL || newval[0] == '\0')
+		return;
+
+	if (stat(newval, &st) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("invalid value for parameter \"extwlist.custom_path\": "
+						"could not access \"%s\": %m", newval)));
+
+	if (!S_ISDIR(st.st_mode))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"extwlist.custom_path\": "
+						"\"%s\" is not a directory", newval)));
+
+	if (access(newval, R_OK | X_OK) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("invalid value for parameter \"extwlist.custom_path\": "
+						"directory \"%s\" is not readable: %m", newval)));
+}
+
+static bool
+check_extwlist_custom_path(char **newval, void **extra, GucSource source)
+{
+	check_extwlist_custom_path_impl(*newval);
+	return true;
+}
 
 /*
  * _PG_init()			- library load-time initialization
@@ -178,27 +201,41 @@ _PG_init(void)
 
 	DefineCustomStringVariable("extwlist.custom_path",
 							   "Directory where to load custom scripts from",
-							   "",
+							   "Must point to an existing, readable directory; "
+							   "empty disables the custom-script feature.",
 							   &extwlist_custom_path,
 							   "",
 							   PGC_SUSET,
 							   GUC_NOT_IN_SAMPLE,
-							   NULL,
+							   check_extwlist_custom_path,
 							   NULL,
 							   NULL);
 
-    DefineCustomBoolVariable("extwlist.extname_from_filename",
-                               "Flag allowing a lookup of extension name in custom script filename",
-                               "",
-                               &extwlist_extname_from_filename,
-                               false,
-                               PGC_SUSET,
-                               GUC_NOT_IN_SAMPLE,
-                               NULL,
-                               NULL,
-                               NULL);
+	DefineCustomBoolVariable("extwlist.restrict_to_database_owner",
+							 "Restrict pgextwlist superuser override to the database owner",
+							 "When on, only the database owner may use pgextwlist "
+							 "to install, update, drop, or comment on whitelisted "
+							 "extensions. Trusted extensions are unaffected.",
+							 &extwlist_restrict_to_database_owner,
+							 false,
+							 PGC_SUSET,
+							 GUC_NOT_IN_SAMPLE,
+							 NULL,
+							 NULL,
+							 NULL);
 
-    EmitWarningsOnPlaceholders("extwlist");
+	DefineCustomBoolVariable("extwlist.extname_from_filename",
+							 "Flag allowing a lookup of extension name in custom script filename",
+							 "",
+							 &extwlist_extname_from_filename,
+							 false,
+							 PGC_SUSET,
+							 GUC_NOT_IN_SAMPLE,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	EmitWarningsOnPlaceholders("extwlist");
 
 	prev_ProcessUtility = ProcessUtility_hook;
 	ProcessUtility_hook = extwlist_ProcessUtility;
@@ -237,8 +274,20 @@ call_extension_scripts(const char *extname,
 					   const char *from_version,
 					   const char *version)
 {
-	char *specific_custom_script;
-	char *generic_custom_script;
+	char	   *specific_custom_script;
+	char	   *generic_custom_script;
+
+	/* Nothing to do if the custom-script feature is disabled. */
+	if (extwlist_custom_path == NULL || extwlist_custom_path[0] == '\0')
+		return;
+
+	/*
+	 * Ensure the per-extension subdirectory exists and is reachable. ENOENT
+	 * is treated as "no custom scripts for this extension" and silently
+	 * skipped; anything else is a hard error to avoid bypassing the whitelist
+	 * via filesystem misconfiguration.
+	 */
+	validate_custom_script_dir(extname);
 
 	if (version)
 	{
@@ -251,7 +300,7 @@ call_extension_scripts(const char *extname,
 		if (access(specific_custom_script, F_OK) == 0)
 		{
 			execute_custom_script(specific_custom_script, schema);
-			return; /* skip generic script */
+			return;				/* skip generic script */
 		}
 	}
 
@@ -516,9 +565,9 @@ check_environment(const char *name, const char *schema)
 static bool
 extension_is_whitelisted(const char *name)
 {
-	bool        whitelisted = false;
-	char       *rawnames = pstrdup(extwlist_extensions);
-	List       *extensions;
+	bool		whitelisted = false;
+	char	   *rawnames = pstrdup(extwlist_extensions);
+	List	   *extensions;
 	ListCell   *lc;
 
 	if (!SplitIdentifierString(rawnames, ',', &extensions))
@@ -530,7 +579,7 @@ extension_is_whitelisted(const char *name)
 	}
 	foreach(lc, extensions)
 	{
-		char *curext = (char *) lfirst(lc);
+		char	   *curext = (char *) lfirst(lc);
 
 		if (strcmp(name, curext) == 0)
 		{
@@ -542,23 +591,36 @@ extension_is_whitelisted(const char *name)
 }
 
 /*
+ * Return true if the current user owns the current database. Used to gate
+ * pgextwlist's superuser-override path when extwlist.restrict_to_database_owner
+ * is enabled. PG 16 removed pg_database_ownercheck() in favour of the generic
+ * object_ownercheck(), so we dispatch on version.
+ */
+static bool
+current_user_is_database_owner(void)
+{
+#if PG_MAJOR_VERSION >= 1600
+	return object_ownercheck(DatabaseRelationId, MyDatabaseId, GetUserId());
+#else
+	return pg_database_ownercheck(MyDatabaseId, GetUserId());
+#endif
+}
+
+/*
  * ProcessUtility hook
  */
 static void
 extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 {
-	char	*name = NULL;
-	char    *schema = NULL;
-	char    *old_version = NULL;
-	char    *new_version = NULL;
-
-#if PG_MAJOR_VERSION >= 1000
-	Node       *parsetree = pstmt->utilityStmt;
-#endif
+	char	   *name = NULL;
+	char	   *schema = NULL;
+	char	   *old_version = NULL;
+	char	   *new_version = NULL;
+	Node	   *parsetree = pstmt->utilityStmt;
 
 	/*
-	 * Don't try to make life hard for our friendly superusers. Also, if
-	 * a valid transaction is not ongoing then return early.
+	 * Don't try to make life hard for our friendly superusers. Also, if a
+	 * valid transaction is not ongoing then return early.
 	 */
 	if (!IsTransactionState() || superuser())
 	{
@@ -569,111 +631,128 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 	switch (nodeTag(parsetree))
 	{
 		case T_CreateExtensionStmt:
-		{
-			CreateExtensionStmt *stmt = (CreateExtensionStmt *)parsetree;
-			name = stmt->extname;
-
-			/*
-			 * CREATE EXTENSION IF NOT EXISTS on an already installed
-			 * extension is a no-op that only emits a notice, so there is
-			 * nothing to escalate privileges for. Hand it over to the
-			 * regular processing instead of running the environment checks
-			 * and the custom scripts for an installation that won't happen.
-			 */
-			if (stmt->if_not_exists &&
-				OidIsValid(get_extension_oid(name, true)))
-				break;
-
-			fill_in_extension_properties(name, stmt->options,
-										 &schema, &old_version, &new_version);
-
-			if (extension_is_whitelisted(name))
 			{
-				check_environment(name, schema);
-				call_ProcessUtility(PROCESS_UTILITY_ARGS,
-									name, schema,
-									old_version, new_version, "create");
-				return;
+				CreateExtensionStmt *stmt = (CreateExtensionStmt *) parsetree;
+
+				name = stmt->extname;
+
+				/*
+				 * CREATE EXTENSION IF NOT EXISTS on an already installed
+				 * extension is a no-op that only emits a notice, so there is
+				 * nothing to escalate privileges for. Hand it over to the
+				 * regular processing instead of running the environment
+				 * checks and the custom scripts for an installation that
+				 * won't happen.
+				 */
+				if (stmt->if_not_exists &&
+					OidIsValid(get_extension_oid(name, true)))
+					break;
+
+				fill_in_extension_properties(name, stmt->options,
+											 &schema, &old_version, &new_version);
+
+				if (extension_is_whitelisted(name))
+				{
+					if (extwlist_restrict_to_database_owner &&
+						!current_user_is_database_owner())
+						ereport(ERROR,
+								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+								 errmsg("extension \"%s\" installation via pgextwlist "
+										"is restricted to the database owner",
+										name)));
+
+					check_environment(name, schema);
+					call_ProcessUtility(PROCESS_UTILITY_ARGS,
+										name, schema,
+										old_version, new_version, "create");
+					return;
+				}
+				break;
 			}
-			break;
-		}
 
 		case T_AlterExtensionStmt:
-		{
-			AlterExtensionStmt *stmt = (AlterExtensionStmt *)parsetree;
-			name = stmt->extname;
-			fill_in_extension_properties(name, stmt->options,
-										 &schema, &old_version, &new_version);
-
-			/* fetch old_version from the catalogs, actually */
-			old_version = get_extension_current_version(name);
-
-			if (extension_is_whitelisted(name))
 			{
-				/*
-				 * ALTER EXTENSION ... UPDATE runs the upgrade scripts and the
-				 * "before" custom script as bootstrap superuser, so apply the
-				 * same shadow/pg_temp checks as CREATE. The schema must come
-				 * from the catalog: ALTER carries no SCHEMA clause, so the
-				 * value filled in above does not reflect the installed
-				 * namespace whose objects the upgrade scripts will resolve.
-				 */
-#if PG_MAJOR_VERSION >= 1600
-				schema = get_namespace_name(
-					get_extension_schema(get_extension_oid(name, false)));
-#else
-				{
-					Relation	extRel;
-					ScanKeyData key[1];
-					SysScanDesc extScan;
-					HeapTuple	extTup;
+				AlterExtensionStmt *stmt = (AlterExtensionStmt *) parsetree;
 
-					extRel = table_open(ExtensionRelationId, AccessShareLock);
-					ScanKeyInit(&key[0],
-								Anum_pg_extension_extname,
-								BTEqualStrategyNumber, F_NAMEEQ,
-								CStringGetDatum(name));
-					extScan = systable_beginscan(extRel, ExtensionNameIndexId,
-												 true, NULL, 1, key);
-					extTup = systable_getnext(extScan);
-					if (!HeapTupleIsValid(extTup))
+				name = stmt->extname;
+				fill_in_extension_properties(name, stmt->options,
+											 &schema, &old_version, &new_version);
+
+				/* fetch old_version from the catalogs, actually */
+				old_version = get_extension_current_version(name);
+
+				if (extension_is_whitelisted(name))
+				{
+					if (extwlist_restrict_to_database_owner &&
+						!current_user_is_database_owner())
 						ereport(ERROR,
-								(errcode(ERRCODE_UNDEFINED_OBJECT),
-								 errmsg("extension \"%s\" does not exist", name)));
+								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+								 errmsg("extension \"%s\" update via pgextwlist "
+										"is restricted to the database owner",
+										name)));
+
+					/*
+					 * ALTER EXTENSION ... UPDATE runs the upgrade scripts and the
+					 * "before" custom script as bootstrap superuser, so apply the
+					 * same shadow/pg_temp checks as CREATE. The schema must come
+					 * from the catalog: ALTER carries no SCHEMA clause, so the
+					 * value filled in above does not reflect the installed
+					 * namespace whose objects the upgrade scripts will resolve.
+					 */
+#if PG_MAJOR_VERSION >= 1600
 					schema = get_namespace_name(
-						((Form_pg_extension) GETSTRUCT(extTup))->extnamespace);
-					systable_endscan(extScan);
-					table_close(extRel, AccessShareLock);
-				}
+						get_extension_schema(get_extension_oid(name, false)));
+#else
+					{
+						Relation	extRel;
+						ScanKeyData key[1];
+						SysScanDesc extScan;
+						HeapTuple	extTup;
+
+						extRel = table_open(ExtensionRelationId, AccessShareLock);
+						ScanKeyInit(&key[0],
+									Anum_pg_extension_extname,
+									BTEqualStrategyNumber, F_NAMEEQ,
+									CStringGetDatum(name));
+						extScan = systable_beginscan(extRel, ExtensionNameIndexId,
+													 true, NULL, 1, key);
+						extTup = systable_getnext(extScan);
+						if (!HeapTupleIsValid(extTup))
+							ereport(ERROR,
+									(errcode(ERRCODE_UNDEFINED_OBJECT),
+									 errmsg("extension \"%s\" does not exist", name)));
+						schema = get_namespace_name(
+							((Form_pg_extension) GETSTRUCT(extTup))->extnamespace);
+						systable_endscan(extScan);
+						table_close(extRel, AccessShareLock);
+					}
 #endif
-				check_environment(name, schema);
-				call_ProcessUtility(PROCESS_UTILITY_ARGS,
-									name, schema,
-									old_version, new_version, "update");
-				return;
+					check_environment(name, schema);
+					call_ProcessUtility(PROCESS_UTILITY_ARGS,
+										name, schema,
+										old_version, new_version, "update");
+					return;
+				}
+				break;
 			}
-			break;
-		}
 
 		case T_DropStmt:
-			if (((DropStmt *)parsetree)->removeType == OBJECT_EXTENSION)
+			if (((DropStmt *) parsetree)->removeType == OBJECT_EXTENSION)
 			{
 				/* DROP EXTENSION can target several of them at once */
-				bool all_in_whitelist = true;
-				ListCell *lc;
+				bool		all_in_whitelist = true;
+				ListCell   *lc;
 
-				foreach(lc, ((DropStmt *)parsetree)->objects)
+				foreach(lc, ((DropStmt *) parsetree)->objects)
 				{
 					/*
 					 * For deconstructing the object list into actual names,
 					 * see the get_object_address_unqualified() function in
 					 * src/backend/catalog/objectaddress.c
 					 */
-					bool whitelisted = false;
-					List *objname = lfirst(lc);
-#if PG_MAJOR_VERSION < 1000
-					name = strVal(linitial(objname));
-#elif PG_MAJOR_VERSION < 1500
+					bool		whitelisted = false;
+					List	   *objname = lfirst(lc);
+#if PG_MAJOR_VERSION < 1500
 					name = strVal((Value *) objname);
 #else
 					name = strVal(castNode(String, objname));
@@ -693,8 +772,15 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 				 */
 				if (all_in_whitelist)
 				{
+					if (extwlist_restrict_to_database_owner &&
+						!current_user_is_database_owner())
+						ereport(ERROR,
+								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+								 errmsg("extension drop via pgextwlist "
+										"is restricted to the database owner")));
+
 					call_ProcessUtility(PROCESS_UTILITY_ARGS,
-										NULL, "", /* schema must not be NULL */
+										NULL, "",	/* schema must not be NULL */
 										NULL, NULL, "drop");
 					return;
 				}
@@ -702,28 +788,36 @@ extwlist_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS)
 			break;
 
 		case T_CommentStmt:
-		{
-			CommentStmt* stmt = (CommentStmt *)parsetree;
-			if (stmt->objtype == OBJECT_EXTENSION)
 			{
-#if PG_MAJOR_VERSION < 1000
-				name = strVal(linitial(stmt->objname));
-#elif PG_MAJOR_VERSION < 1500
-				name = strVal((Value *) stmt->object);
+				CommentStmt *stmt = (CommentStmt *) parsetree;
+
+				if (stmt->objtype == OBJECT_EXTENSION)
+				{
+#if PG_MAJOR_VERSION < 1500
+					name = strVal((Value *) stmt->object);
 #else
-				name = strVal(castNode(String, stmt->object));
+					name = strVal(castNode(String, stmt->object));
 #endif
 
-				if (extension_is_whitelisted(name))
-				{
-					call_ProcessUtility(PROCESS_UTILITY_ARGS,
-										name, "", /* schema must not be NULL */
-										NULL, NULL, "comment");
-					return;
+					if (extension_is_whitelisted(name))
+					{
+						if (extwlist_restrict_to_database_owner &&
+							!current_user_is_database_owner())
+							ereport(ERROR,
+									(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+									 errmsg("comment on extension \"%s\" via pgextwlist "
+											"is restricted to the database owner",
+											name)));
+
+						call_ProcessUtility(PROCESS_UTILITY_ARGS,
+											name, "",	/* schema must not be
+														 * NULL */
+											NULL, NULL, "comment");
+						return;
+					}
 				}
+				break;
 			}
-			break;
-		}
 			/* We intentionally don't support that command. */
 		case T_AlterExtensionContentsStmt:
 		default:
@@ -764,16 +858,14 @@ call_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS,
 		/* "drop extension" can list several extensions, walk them here */
 		if (strcmp(action, "drop") == 0)
 		{
-			Node   *parsetree = pstmt->utilityStmt;
-			ListCell *lc;
-			char   *name = NULL;
+			Node	   *parsetree = pstmt->utilityStmt;
+			ListCell   *lc;
+			char	   *name = NULL;
 
-			foreach(lc, ((DropStmt *)parsetree)->objects)
+			foreach(lc, ((DropStmt *) parsetree)->objects)
 			{
-				List *objname = lfirst(lc);
-#if PG_MAJOR_VERSION < 1000
-				name = strVal(linitial(objname));
-#elif PG_MAJOR_VERSION < 1500
+				List	   *objname = lfirst(lc);
+#if PG_MAJOR_VERSION < 1500
 				name = strVal((Value *) objname);
 #else
 				name = strVal(castNode(String, objname));
@@ -793,16 +885,14 @@ call_ProcessUtility(PROCESS_UTILITY_PROTO_ARGS,
 	{
 		if (strcmp(action, "drop") == 0)
 		{
-			Node   *parsetree = pstmt->utilityStmt;
-			ListCell *lc;
-			char   *name = NULL;
+			Node	   *parsetree = pstmt->utilityStmt;
+			ListCell   *lc;
+			char	   *name = NULL;
 
-			foreach(lc, ((DropStmt *)parsetree)->objects)
+			foreach(lc, ((DropStmt *) parsetree)->objects)
 			{
-				List *objname = lfirst(lc);
-#if PG_MAJOR_VERSION < 1000
-				name = strVal(linitial(objname));
-#elif PG_MAJOR_VERSION < 1500
+				List	   *objname = lfirst(lc);
+#if PG_MAJOR_VERSION < 1500
 				name = strVal((Value *) objname);
 #else
 				name = strVal(castNode(String, objname));

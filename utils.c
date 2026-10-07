@@ -1,4 +1,5 @@
-/* PostgreSQL Extension WhiteList -- Dimitri Fontaine
+/*
+ * PostgreSQL Extension WhiteList -- Dimitri Fontaine
  *
  * Author: Dimitri Fontaine <dimitri@2ndQuadrant.fr>
  * Licence: PostgreSQL
@@ -24,12 +25,7 @@
 #include "pgextwlist.h"
 #include "utils.h"
 
-#if PG_MAJOR_VERSION >= 903
 #include "access/htup_details.h"
-#else
-#include "access/htup.h"
-#endif
-
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/skey.h"
@@ -77,8 +73,8 @@ parse_default_version_in_control_file(const char *extname,
 	char	   *filename;
 	FILE	   *file;
 	ConfigVariable *item,
-		*head = NULL,
-		*tail = NULL;
+			   *head = NULL,
+			   *tail = NULL;
 
 	/*
 	 * Locate the file to read.
@@ -89,7 +85,7 @@ parse_default_version_in_control_file(const char *extname,
 
 	if ((file = AllocateFile(filename, "r")) == NULL)
 	{
-        /* we still need to handle the following error here */
+		/* we still need to handle the following error here */
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open extension control file \"%s\": %m",
@@ -126,6 +122,16 @@ parse_default_version_in_control_file(const char *extname,
 }
 
 /*
+ * Returns true when extwlist.custom_path is set to a usable value, false
+ * when it's NULL or empty (feature disabled).
+ */
+static bool
+custom_path_is_set(void)
+{
+	return extwlist_custom_path != NULL && extwlist_custom_path[0] != '\0';
+}
+
+/*
  * Return the schema pinned by the extension's control file ("schema = ..."),
  * or NULL when the control file does not specify one.
  */
@@ -159,7 +165,7 @@ get_generic_custom_script_filename(const char *name,
 {
 	char	   *result;
 
-	if (extwlist_custom_path == NULL)
+	if (!custom_path_is_set())
 		return NULL;
 
 	result = (char *) palloc(MAXPGPATH);
@@ -182,7 +188,7 @@ get_specific_custom_script_filename(const char *name,
 {
 	char	   *result;
 
-	if (extwlist_custom_path == NULL)
+	if (!custom_path_is_set())
 		return NULL;
 
 	result = (char *) palloc(MAXPGPATH);
@@ -209,6 +215,65 @@ get_specific_custom_script_filename(const char *name,
 }
 
 /*
+ * Build ${extwlist.custom_path}/${extname} into a palloc'd buffer. Returns
+ * NULL if custom_path is unset; the caller is responsible for pfree.
+ */
+char *
+get_custom_script_dir(const char *extname)
+{
+	char	   *result;
+
+	if (!custom_path_is_set())
+		return NULL;
+
+	result = (char *) palloc(MAXPGPATH);
+	snprintf(result, MAXPGPATH, "%s/%s", extwlist_custom_path, extname);
+
+	return result;
+}
+
+/*
+ * Ensure the per-extension subdirectory under extwlist.custom_path is
+ * reachable. ENOENT means the extension simply has no custom scripts and
+ * is treated as a silent skip; any other stat() failure is a hard error
+ * because silently dropping hooks would defeat the security purpose of
+ * the whitelist.
+ */
+void
+validate_custom_script_dir(const char *extname)
+{
+	char	   *dir;
+	struct stat st;
+
+	if (!custom_path_is_set())
+		return;
+
+	dir = get_custom_script_dir(extname);
+
+	if (stat(dir, &st) != 0)
+	{
+		if (errno == ENOENT)
+		{
+			/* subdir legitimately absent; nothing to run */
+			pfree(dir);
+			return;
+		}
+
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not access custom script directory \"%s\": %m",
+						dir)));
+	}
+
+	if (!S_ISDIR(st.st_mode))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("custom script path \"%s\" is not a directory", dir)));
+
+	pfree(dir);
+}
+
+/*
  * At CREATE EXTENSION UPDATE time, we generally aren't provided with the
  * current version of the extension to upgrade, go fetch it from the catalogs.
  */
@@ -223,9 +288,9 @@ get_extension_current_version(const char *extname)
 	Datum		datum;
 	bool		isnull;
 
-    /*
-     * Look up the extension --- it must already exist in pg_extension
-     */
+	/*
+	 * Look up the extension --- it must already exist in pg_extension
+	 */
 	extRel = table_open(ExtensionRelationId, AccessShareLock);
 
 	ScanKeyInit(&key[0],
@@ -275,8 +340,8 @@ fill_in_extension_properties(const char *extname,
 	DefElem    *d_old_version = NULL;
 
 	/*
-	 * Read the statement option list, taking care not to issue any errors here
-	 * ourselves if at all possible: let the core code handle them.
+	 * Read the statement option list, taking care not to issue any errors
+	 * here ourselves if at all possible: let the core code handle them.
 	 */
 	foreach(lc, options)
 	{
@@ -320,16 +385,16 @@ fill_in_extension_properties(const char *extname,
 		 * Use the current default creation namespace, which is the first
 		 * explicit entry in the search_path.
 		 */
-		Oid         schemaOid;
+		Oid			schemaOid;
 		List	   *search_path = fetch_search_path(false);
 
-		if (search_path == NIL)	/* nothing valid in search_path? */
+		if (search_path == NIL) /* nothing valid in search_path? */
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_SCHEMA),
 					 errmsg("no schema has been selected to create in")));
 		schemaOid = linitial_oid(search_path);
 		*schema = get_namespace_name(schemaOid);
-		if (*schema == NULL) /* recently-deleted namespace? */
+		if (*schema == NULL)	/* recently-deleted namespace? */
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_SCHEMA),
 					 errmsg("no schema has been selected to create in")));
@@ -344,27 +409,31 @@ fill_in_extension_properties(const char *extname,
 static char *
 read_custom_script_file(const char *filename)
 {
-	int			src_encoding, dest_encoding = GetDatabaseEncoding();
+	int			src_encoding,
+				dest_encoding = GetDatabaseEncoding();
 	bytea	   *content;
 	char	   *src_str;
 	char	   *dest_str;
 	int			len;
 	FILE	   *fp;
 	struct stat fst;
-	size_t	    nbytes;
+	size_t		nbytes;
 
-	/* read_binary_file was made static in 9.5 so we'll reimplement the logic here */
+	/*
+	 * read_binary_file was made static in 9.5 so we'll reimplement the logic
+	 * here
+	 */
 	if ((fp = AllocateFile(filename, PG_BINARY_R)) == NULL)
 		ereport(ERROR,
-			(errcode_for_file_access(),
-			 errmsg("could not open file \"%s\" for reading: %m",
-					filename)));
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\" for reading: %m",
+						filename)));
 
 	if (fstat(fileno(fp), &fst) < 0)
 		ereport(ERROR,
-			(errcode_for_file_access(),
-			 errmsg("could not stat file \"%s\" %m",
-					filename)));
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\" %m",
+						filename)));
 
 	content = (bytea *) palloc((Size) fst.st_size + VARHDRSZ);
 	nbytes = fread(VARDATA(content), 1, (size_t) fst.st_size, fp);
@@ -441,11 +510,7 @@ execute_sql_string(const char *sql, const char *filename)
 	 */
 	foreach(lc1, raw_parsetree_list)
 	{
-#if PG_MAJOR_VERSION >= 1000
-		RawStmt	   *parsetree = lfirst_node(RawStmt, lc1);
-#else
-		Node	   *parsetree = (Node *) lfirst(lc1);
-#endif
+		RawStmt    *parsetree = lfirst_node(RawStmt, lc1);
 		List	   *stmt_list;
 		ListCell   *lc2;
 
@@ -455,16 +520,14 @@ execute_sql_string(const char *sql, const char *filename)
 													   NULL,
 													   0,
 													   NULL
-													   );
+			);
 #else
 		stmt_list = pg_analyze_and_rewrite(parsetree,
 										   sql,
 										   NULL,
 										   0
-#if PG_MAJOR_VERSION >= 1000
-										   , NULL
-#endif
-										   );
+										   ,NULL
+			);
 #endif
 		stmt_list = pg_plan_queries(stmt_list,
 #if PG_MAJOR_VERSION >= 1300
@@ -475,11 +538,7 @@ execute_sql_string(const char *sql, const char *filename)
 
 		foreach(lc2, stmt_list)
 		{
-#if PG_MAJOR_VERSION >= 1000
 			PlannedStmt *stmt = lfirst_node(PlannedStmt, lc2);
-#else
-			Node	   *stmt = (Node *) lfirst(lc2);
-#endif
 
 			if (IsA(stmt, TransactionStmt))
 				ereport(ERROR,
@@ -495,21 +554,16 @@ execute_sql_string(const char *sql, const char *filename)
 			{
 				QueryDesc  *qdesc;
 
-				qdesc = CreateQueryDesc((PlannedStmt *) stmt,
-										sql,
+				qdesc = CreateQueryDesc((PlannedStmt *) stmt, sql,
 										GetActiveSnapshot(), NULL,
-										dest, NULL,
-#if PG_MAJOR_VERSION >= 1000
-										NULL,
-#endif
-										0);
+										dest, NULL, NULL, 0);
 
 				ExecutorStart(qdesc, 0);
 				ExecutorRun(qdesc, ForwardScanDirection, 0
-#if PG_MAJOR_VERSION >= 1000 && PG_MAJOR_VERSION < 1800
-					, true
+#if PG_MAJOR_VERSION < 1800
+							,true
 #endif
-				);
+					);
 				ExecutorFinish(qdesc);
 				ExecutorEnd(qdesc);
 
@@ -517,23 +571,12 @@ execute_sql_string(const char *sql, const char *filename)
 			}
 			else
 			{
-				ProcessUtility(stmt,
-							   sql,
+				ProcessUtility(stmt, sql,
 #if PG_MAJOR_VERSION >= 1400
-							   false,		/* no need to copy */
+							   false,	/* no need to copy */
 #endif
-#if PG_MAJOR_VERSION >= 903
 							   PROCESS_UTILITY_QUERY,
-#endif
-							   NULL,
-#if PG_MAJOR_VERSION >= 1000
-							   NULL,
-#endif
-#if PG_MAJOR_VERSION < 903
-							   false,		/* not top level */
-#endif
-							   dest,
-							   NULL);
+							   NULL, NULL, dest, NULL);
 			}
 
 			PopActiveSnapshot();
@@ -554,10 +597,10 @@ execute_sql_string(const char *sql, const char *filename)
  *  where datname = current_database();
  */
 static char *
-get_current_database_owner_name()
+get_current_database_owner_name(void)
 {
 	HeapTuple	dbtuple;
-	Oid         owner;
+	Oid			owner;
 
 	dbtuple = SearchSysCache1(DATABASEOID, MyDatabaseId);
 	if (HeapTupleIsValid(dbtuple))
@@ -568,11 +611,35 @@ get_current_database_owner_name()
 	else
 		return NULL;
 
-	return GetUserNameFromId(owner
-#if PG_MAJOR_VERSION >= 905
-							, false
-#endif
-	);
+	return GetUserNameFromId(owner, false);
+}
+
+/*
+ * Reject @-substitution values containing characters that could be used to
+ * break out of quoting in the resulting script (CVE-2023-39417; upstream
+ * fix cd5f2a3570). The check is applied to the raw, unquoted name because
+ * quote_identifier() output always contains '"', which would trip the
+ * check spuriously.
+ */
+static void
+check_substitution_value(const char *placeholder, const char *value)
+{
+	static const char forbidden[] = "\"$'\\";
+
+	if (value == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid value for \"%s\" substitution",
+						placeholder)));
+
+	if (strpbrk(value, forbidden) != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid value for \"%s\" substitution",
+						placeholder),
+				 errdetail("Value must not contain any of: %s", forbidden),
+				 errhint("Rename the object referenced by %s.",
+						 placeholder)));
 }
 
 /*
@@ -583,7 +650,6 @@ execute_custom_script(const char *filename, const char *schemaName)
 {
 	int			save_nestlevel;
 	StringInfoData pathbuf;
-	const char *qSchemaName = quote_identifier(schemaName);
 
 	elog(DEBUG1, "Executing custom script \"%s\"", filename);
 
@@ -601,25 +667,16 @@ execute_custom_script(const char *filename, const char *schemaName)
 	if (client_min_messages < WARNING)
 		(void) set_config_option("client_min_messages", "warning",
 								 PGC_USERSET, PGC_S_SESSION,
-								 GUC_ACTION_SAVE, true
-#if PG_MAJOR_VERSION >= 902
-								 , 0
-#endif
-#if PG_MAJOR_VERSION >= 905
-								 , false
-#endif
+								 GUC_ACTION_SAVE, true, 0, false
 			);
-	if (log_min_messages < WARNING)
-		(void) set_config_option("log_min_messages", "warning",
-								 PGC_SUSET, PGC_S_SESSION,
-								 GUC_ACTION_SAVE, true
-#if PG_MAJOR_VERSION >= 902
-								 , 0
-#endif
-#if PG_MAJOR_VERSION >= 905
-								 , false
-#endif
-			);
+
+	/*
+	 * log_min_messages was changed from a scalar int (PG <= 18) to something
+	 * more complex in PG 19. Set it unconditionally here for simplicity.
+	 */
+	(void) set_config_option("log_min_messages", "warning",
+							 PGC_SUSET, PGC_S_SESSION,
+							 GUC_ACTION_SAVE, true, 0, false);
 
 	/*
 	 * Set up the search path to contain the target schema, then the schemas
@@ -636,14 +693,7 @@ execute_custom_script(const char *filename, const char *schemaName)
 
 	(void) set_config_option("search_path", pathbuf.data,
 							 PGC_USERSET, PGC_S_SESSION,
-							 GUC_ACTION_SAVE, true
-#if PG_MAJOR_VERSION >= 902
-							 , 0
-#endif
-#if PG_MAJOR_VERSION >= 905
-								 , false
-#endif
-		);
+							 GUC_ACTION_SAVE, true, 0, false);
 
 	PG_TRY();
 	{
@@ -668,35 +718,40 @@ execute_custom_script(const char *filename, const char *schemaName)
 		/*
 		 * substitute the target schema name for occurrences of @extschema@.
 		 */
+		check_substitution_value("@extschema@", schemaName);
 		t_sql = DirectFunctionCall3Coll(replace_text,
-									C_COLLATION_OID,
-									t_sql,
-									CStringGetTextDatum("@extschema@"),
-									CStringGetTextDatum(qSchemaName));
+										C_COLLATION_OID,
+										t_sql,
+										CStringGetTextDatum("@extschema@"),
+										CStringGetTextDatum(schemaName));
 
 		/*
 		 * substitute the current user name for occurrences of @current_user@
 		 */
-		t_sql = DirectFunctionCall3Coll(replace_text,
-									C_COLLATION_OID,
-									t_sql,
-									CStringGetTextDatum("@current_user@"),
-									CStringGetTextDatum(
-										GetUserNameFromId(GetUserId()
-#if PG_MAJOR_VERSION >= 905
-														  , false
-#endif
-										)));
+		{
+			char	   *cur_user = GetUserNameFromId(GetUserId(), false);
+
+			check_substitution_value("@current_user@", cur_user);
+			t_sql = DirectFunctionCall3Coll(replace_text,
+											C_COLLATION_OID,
+											t_sql,
+											CStringGetTextDatum("@current_user@"),
+											CStringGetTextDatum(cur_user));
+		}
 
 		/*
 		 * substitute the database owner for occurrences of @database_owner@
 		 */
-		t_sql = DirectFunctionCall3Coll(replace_text,
-									C_COLLATION_OID,
-									t_sql,
-									CStringGetTextDatum("@database_owner@"),
-									CStringGetTextDatum(
-										get_current_database_owner_name()));
+		{
+			char	   *db_owner = get_current_database_owner_name();
+
+			check_substitution_value("@database_owner@", db_owner);
+			t_sql = DirectFunctionCall3Coll(replace_text,
+											C_COLLATION_OID,
+											t_sql,
+											CStringGetTextDatum("@database_owner@"),
+											CStringGetTextDatum(db_owner));
+		}
 
 		/* And now back to C string */
 		c_sql = text_to_cstring(DatumGetTextPP(t_sql));

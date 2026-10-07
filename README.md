@@ -62,7 +62,21 @@ that performs the extension installing, and the error behavior.
 
 * `extwlist.custom_path`
 
-  Filesystem path where to look for *custom scripts*.
+  Filesystem path where to look for *custom scripts*. Must point to an
+  existing, readable directory; misconfiguration raises an `ERROR` at
+  assignment time (or at `CREATE` / `UPDATE EXTENSION` time for the
+  per-extension subdirectory) — scripts are never silently skipped. An
+  empty string disables the feature.
+
+* `extwlist.restrict_to_database_owner`
+
+  When `on`, pgextwlist only invokes its superuser-override path
+  (`CREATE`, `ALTER … UPDATE`, `DROP`, `COMMENT ON EXTENSION` on
+  whitelisted extensions) when the current user owns the current
+  database. Non-owners receive `ERROR: extension "…" … via pgextwlist
+  is restricted to the database owner`. Trusted extensions and any
+  non-whitelisted extension fall through to PostgreSQL's own checks
+  unchanged. Off by default.
 
 * `extwlist.extname_from_filename`
 
@@ -231,3 +245,18 @@ control each time a utility statement is issued. When this statement is a
 `CREATE EXTENSION`, the extension's name is extracted from the `parsetree`
 and checked against the whitelist. *Superuser* is obtained as in the usual
 `SECURITY DEFINER` case, except hard coded to target the *bootstrap user*.
+
+## Maintenance & Support
+
+This project is maintained through [OSS
+Maintenance](https://oss.theartofpostgresql.com) — a funded model designed
+for **cloud providers and enterprises** running pgextwlist in production.
+
+- Priority bug fixes and improvements via a paid queue
+- Quarterly releases with predictable delivery
+- Upstream-first: fixes land in the project itself
+
+PostgreSQL consultancies can also subscribe at the **Partner** tier to cover
+their entire client base under a single plan.
+
+**[View support plans](https://oss.theartofpostgresql.com/#pricing)**

@@ -1,4 +1,5 @@
-/* PostgreSQL Extension WhiteList -- Dimitri Fontaine
+/*
+ * PostgreSQL Extension WhiteList -- Dimitri Fontaine
  *
  * Author: Dimitri Fontaine <dimitri@2ndQuadrant.fr>
  * Licence: PostgreSQL
@@ -14,7 +15,6 @@
 #error "Unknown PostgreSQL version"
 #endif
 
-#if PG_MAJOR_VERSION < 901
+#if PG_MAJOR_VERSION < 1000
 #error "Unsupported postgresql version"
 #endif
-

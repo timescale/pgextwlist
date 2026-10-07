@@ -1,4 +1,5 @@
-/* PostgreSQL Extension WhiteList -- Dimitri Fontaine
+/*
+ * PostgreSQL Extension WhiteList -- Dimitri Fontaine
  *
  * Author: Dimitri Fontaine <dimitri@2ndQuadrant.fr>
  * Licence: PostgreSQL
@@ -18,27 +19,32 @@
 
 extern char *extwlist_extensions;
 extern char *extwlist_custom_path;
+extern bool	extwlist_restrict_to_database_owner;
 extern bool extwlist_extname_from_filename;
 
-char *get_specific_custom_script_filename(const char *name,
-										  const char *when,
-										  const char *from_version,
-										  const char *version);
+char	   *get_specific_custom_script_filename(const char *name,
+												const char *when,
+												const char *from_version,
+												const char *version);
 
-char *get_generic_custom_script_filename(const char *name,
-										 const char *action,
-										 const char *when);
+char	   *get_generic_custom_script_filename(const char *name,
+											   const char *action,
+											   const char *when);
 
-char *get_extension_current_version(const char *extname);
+char	   *get_custom_script_dir(const char *extname);
 
-char *get_extension_control_schema(const char *extname);
+void		validate_custom_script_dir(const char *extname);
 
-void fill_in_extension_properties(const char *extname,
-								  List *options,
-								  char **schema,
-								  char **old_version,
-								  char **new_version);
+char	   *get_extension_control_schema(const char *extname);
 
-void execute_custom_script(const char *schemaName, const char *filename);
+char	   *get_extension_current_version(const char *extname);
+
+void		fill_in_extension_properties(const char *extname,
+										 List *options,
+										 char **schema,
+										 char **old_version,
+										 char **new_version);
+
+void		execute_custom_script(const char *schemaName, const char *filename);
 
 #endif
