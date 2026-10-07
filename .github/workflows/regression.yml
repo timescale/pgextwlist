@@ -10,6 +10,8 @@ jobs:
       fail-fast: false
       matrix:
         pg:
+          - 20
+          - 19
           - 18
           - 17
           - 16
@@ -29,7 +31,7 @@ jobs:
         run: pg-start ${{ matrix.pg }}
 
       - name: Check out the repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@main
 
       - name: Test on PostgreSQL ${{ matrix.pg }}
         run: |
