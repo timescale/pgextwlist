@@ -10,11 +10,10 @@ from pg_settings where name = 'server_version_num';
 set client_min_messages = debug;
 set extwlist.custom_path = '';
 set role mere_mortal;
--- in the hope refint stays at version 1.0 in PostgreSQL
-create extension refint;
-alter extension refint update;
-NOTICE:  version "1.0" of extension "refint" is already installed
-comment on extension refint is 'snarky remark';
-drop extension refint, refint;
-DEBUG:  drop auto-cascades to function check_primary_key()
-DEBUG:  drop auto-cascades to function check_foreign_key()
+-- in the hope autoinc stays at version 1.0 in PostgreSQL
+create extension autoinc;
+alter extension autoinc update;
+NOTICE:  version "1.0" of extension "autoinc" is already installed
+comment on extension autoinc is 'snarky remark';
+drop extension autoinc, autoinc;
+DEBUG:  drop auto-cascades to function autoinc()

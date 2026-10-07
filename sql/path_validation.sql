@@ -39,8 +39,8 @@ FROM pg_settings WHERE name = 'extwlist.custom_path';
 -- on a whitelisted extension whose subdir does not exist under the
 -- custom_path must succeed without error.
 SET ROLE mere_mortal;
-CREATE EXTENSION refint;
-DROP EXTENSION refint;
+CREATE EXTENSION autoinc;
+DROP EXTENSION autoinc;
 RESET ROLE;
 
 -- 5. Restore default so downstream tests start from a known state.
